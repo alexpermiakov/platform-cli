@@ -39,18 +39,23 @@ jobs:
       - name: Lint generated workflows
         run: |
           set -euo pipefail
-          docker run --rm -v /tmp/scaffolds:/scaffolds -w /scaffolds rhysd/actionlint:latest \
+          docker run --rm -v /tmp/scaffolds:/scaffolds -w /scaffolds rhysd/actionlint:1.7.12 \
             -shellcheck= -pyflakes= $(cd /tmp/scaffolds && find . -path '*.github/workflows/*.yaml')
 
       # The Dockerfiles are templated text until something parses them; hadolint
       # is what catches a broken continuation or a stage that never drops root.
+      # No -e: one finding must not hide the other languages' Dockerfiles, or
+      # fixing three problems takes three round trips through CI.
       - name: Lint generated Dockerfiles
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          fail=0
           for f in $(find /tmp/scaffolds -name Dockerfile); do
-            echo "hadolint $f"
-            docker run --rm -i hadolint/hadolint:latest hadolint - < "$f"
+            echo "::group::hadolint $f"
+            docker run --rm -i hadolint/hadolint:v2.15.1 hadolint - < "$f" || fail=1
+            echo "::endgroup::"
           done
+          exit $fail
 
   # The generated values must actually render through the platform chart, so a
   # chart change that breaks the scaffold fails here, not at ArgoCD sync.

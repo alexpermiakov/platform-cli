@@ -3,6 +3,7 @@ package scaffold
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -475,10 +476,17 @@ func TestDockerfileIsGeneratedPerLanguage(t *testing.T) {
 			if !strings.Contains(df, base) {
 				t.Errorf("Dockerfile for %s does not build from %s", lang, base)
 			}
-			// The chart's securityContext sets runAsNonRoot, so an image with
-			// no USER fails admission rather than starting.
-			if !strings.Contains(df, "USER ") {
-				t.Errorf("Dockerfile for %s never drops root; the pod will fail runAsNonRoot", lang)
+			// The chart sets runAsNonRoot without pinning runAsUser, and the
+			// kubelet cannot resolve a username against the image at
+			// admission. A named USER -- `nonroot`, `node` -- fails with
+			// "cannot verify user is non-root" and the container never
+			// starts, so the uid has to be numeric.
+			user := userDirective.FindStringSubmatch(df)
+			if user == nil {
+				t.Fatalf("Dockerfile for %s never drops root; the pod will fail runAsNonRoot", lang)
+			}
+			if !numericUser.MatchString(user[1]) {
+				t.Errorf("Dockerfile for %s has USER %q; it must be numeric or the kubelet cannot verify it is non-root", lang, user[1])
 			}
 			// CI passes --build-arg VERSION on every build.
 			if !strings.Contains(df, "ARG VERSION") {
@@ -525,3 +533,9 @@ func TestLanguageDoesNotLeakIntoValues(t *testing.T) {
 		}
 	}
 }
+
+var (
+	// The final USER, which is the one the runtime stage actually ends on.
+	userDirective = regexp.MustCompile(`(?m)^USER (\S+)\s*$`)
+	numericUser   = regexp.MustCompile(`^[0-9]+(:[0-9]+)?$`)
+)

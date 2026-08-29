@@ -18,10 +18,12 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -o /out/app .
 
 # distroless/static: no shell, no package manager, nothing to exploit. Its
-# nonroot tag already runs as uid 65532, which satisfies the chart's
-# runAsNonRoot check.
+# nonroot tag is uid 65532.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/app /app
 EXPOSE {%.Port%}
-USER nonroot:nonroot
+# Numeric, not `nonroot`. The chart sets runAsNonRoot without pinning runAsUser,
+# and the kubelet cannot resolve a username against the image at admission: a
+# named USER fails with "cannot verify user is non-root" and never starts.
+USER 65532:65532
 ENTRYPOINT ["/app"]

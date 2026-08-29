@@ -24,12 +24,14 @@ ENV NODE_ENV=production \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
 WORKDIR /app
-COPY --from=build --chown=node:node /src ./
+COPY --from=build --chown=1000:1000 /src ./
 
 EXPOSE {%.Port%}
-# The node image ships a uid-1000 `node` user, which satisfies the chart's
-# runAsNonRoot check.
-USER node
+# 1000 is the `node` user the image already ships, written numerically: the
+# chart sets runAsNonRoot without pinning runAsUser, and the kubelet cannot
+# resolve a username against the image at admission, so `USER node` would fail
+# with "cannot verify user is non-root" and never start.
+USER 1000:1000
 
 # Point this at your entrypoint. Do not use `npm start`: it forks a shell and
 # swallows SIGTERM, so Kubernetes waits out the full termination grace period

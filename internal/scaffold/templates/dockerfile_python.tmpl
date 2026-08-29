@@ -23,8 +23,10 @@ COPY --from=build /install /usr/local
 WORKDIR /app
 COPY . .
 
-# An explicit high uid, so the chart's runAsNonRoot check passes and the number
-# does not collide with anything the base image already created.
+# An explicit high uid that does not collide with anything the base image
+# already created. Kept numeric on the USER line: the chart sets runAsNonRoot
+# without pinning runAsUser, and the kubelet cannot resolve a username against
+# the image at admission.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app
 USER 10001
 
