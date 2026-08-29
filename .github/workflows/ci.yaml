@@ -9,6 +9,8 @@ permissions:
   contents: read
 
 jobs:
+  # Everything that needs nothing but this repo. Runs for every contributor,
+  # forks included.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -21,12 +23,6 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
-      # The generated values must actually render through the platform chart,
-      # so a chart change that breaks the scaffold fails here, not at sync.
-      - uses: azure/setup-helm@v4
-        with:
-          version: v4.1.4
-
       # Scaffold every language into /tmp/scaffolds, so the checks below all
       # run against the same set of generated repos.
       - name: Scaffold one service per language
@@ -35,24 +31,6 @@ jobs:
           go run . init web-svc --team platform --language go     --ingress --env dev,prod --non-interactive --out /tmp/scaffolds
           go run . init api-svc --team platform --language node   --ingress --env dev      --non-interactive --out /tmp/scaffolds
           go run . init job-svc --team platform --language python           --env dev      --non-interactive --out /tmp/scaffolds
-
-      - name: Render generated values against standard-service
-        run: |
-          set -euo pipefail
-          git clone --depth 1 https://github.com/alexpermiakov/paved-road.git /tmp/paved-road
-
-          cat > /tmp/platform.yaml <<'YAML'
-          platform:
-            ecrRegistry: "123456789012.dkr.ecr.us-west-2.amazonaws.com"
-            wafAclArn: "arn:aws:wafv2:us-west-2:123456789012:regional/webacl/ci/abc"
-          YAML
-
-          for f in $(find /tmp/scaffolds -path '*argocd/applications*' -name '*.yaml'); do
-            name=$(basename "$f" .yaml)
-            echo "rendering $f"
-            helm template "$name" /tmp/paved-road/helm-charts/standard-service \
-              --namespace "$name" -f /tmp/platform.yaml -f "$f" > /dev/null
-          done
 
       # A quality gate spliced in from a per-language partial is one bad indent
       # away from a workflow GitHub silently ignores. actionlint parses it the
@@ -72,6 +50,72 @@ jobs:
           for f in $(find /tmp/scaffolds -name Dockerfile); do
             echo "hadolint $f"
             docker run --rm -i hadolint/hadolint:latest hadolint - < "$f"
+          done
+
+  # The generated values must actually render through the platform chart, so a
+  # chart change that breaks the scaffold fails here, not at ArgoCD sync.
+  #
+  # Split out because it is the only job needing the platform repo, which is
+  # private while this repo is public: a pull request from a fork gets no
+  # secrets, so it skips this rather than failing on something the contributor
+  # has no way to fix. Pushes to main and same-repo PRs still gate on it.
+  chart-render:
+    name: Render against standard-service
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      # A GitHub App installed on the platform repo with contents:read — the
+      # same App the generated service CI uses to open its deploy PR, and the
+      # same reason: the token is short-lived and scoped to one repository,
+      # where a PAT would be neither.
+      - name: Mint platform repo token
+        id: token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.PLATFORM_APP_ID }}
+          private-key: ${{ secrets.PLATFORM_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: paved-road
+
+      - name: Check out the platform repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/paved-road
+          token: ${{ steps.token.outputs.token }}
+          path: paved-road
+          persist-credentials: false
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.1.4
+
+      - name: Scaffold one service per language
+        run: |
+          set -euo pipefail
+          go run . init web-svc --team platform --language go     --ingress --env dev,prod --non-interactive --out /tmp/scaffolds
+          go run . init api-svc --team platform --language node   --ingress --env dev      --non-interactive --out /tmp/scaffolds
+          go run . init job-svc --team platform --language python           --env dev      --non-interactive --out /tmp/scaffolds
+
+      - name: Render generated values against standard-service
+        run: |
+          set -euo pipefail
+          cat > /tmp/platform.yaml <<'VALUES'
+          platform:
+            ecrRegistry: "123456789012.dkr.ecr.us-west-2.amazonaws.com"
+            wafAclArn: "arn:aws:wafv2:us-west-2:123456789012:regional/webacl/ci/abc"
+          VALUES
+
+          for f in $(find /tmp/scaffolds -path '*argocd/applications*' -name '*.yaml'); do
+            name=$(basename "$f" .yaml)
+            echo "rendering $f"
+            helm template "$name" "$GITHUB_WORKSPACE/paved-road/helm-charts/standard-service" \
+              --namespace "$name" -f /tmp/platform.yaml -f "$f" > /dev/null
           done
 
   lint:

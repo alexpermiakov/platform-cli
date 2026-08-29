@@ -127,7 +127,27 @@ The table-driven tests iterate `Languages`, so a missing template fails the
 suite rather than reaching a user.
 
 CI scaffolds one service per language and then checks all three the way their
-consumers would: the values go through the real `standard-service` chart, the
-workflows through `actionlint`, and the Dockerfiles through `hadolint`. A chart
+consumers would: the workflows through `actionlint`, the Dockerfiles through
+`hadolint`, and the values through the real `standard-service` chart. A chart
 change that breaks the scaffold, or a partial spliced in at the wrong
 indentation, fails here rather than at ArgoCD sync.
+
+The chart render is a separate `chart-render` job because it is the only one
+that needs [paved-road](https://github.com/alexpermiakov/paved-road), which is
+private while this repo is public. It checks that repo out with a GitHub App
+token, so this repository needs the same two settings the generated services
+do:
+
+| Kind | Name |
+|---|---|
+| Variable | `PLATFORM_APP_ID` |
+| Secret | `PLATFORM_APP_PRIVATE_KEY` |
+
+The App has to be installed on `paved-road` with `contents: read`. The same App
+the generated service CI uses already qualifies — it needs `contents: write`
+there to open deploy PRs, and read is a subset.
+
+A pull request from a fork gets no secrets, so `chart-render` skips itself
+rather than failing on something an outside contributor cannot fix. Pushes to
+`main` and same-repo pull requests still gate on it, and `test` and `lint` run
+for everyone.
