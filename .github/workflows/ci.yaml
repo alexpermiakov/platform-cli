@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - run: go vet ./...
+      - run: go test -race ./...
+
+      # The generated values must actually render through the platform chart,
+      # so a chart change that breaks the scaffold fails here, not at sync.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.1.4
+
+      - name: Render generated values against standard-service
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/alexpermiakov/paved-road.git /tmp/paved-road
+
+          cat > /tmp/platform.yaml <<'YAML'
+          platform:
+            ecrRegistry: "123456789012.dkr.ecr.us-west-2.amazonaws.com"
+            wafAclArn: "arn:aws:wafv2:us-west-2:123456789012:regional/webacl/ci/abc"
+          YAML
+
+          go run . init web-svc --team platform --ingress --env dev,prod --non-interactive --out /tmp/web
+          go run . init worker-svc --team platform --env dev --non-interactive --out /tmp/worker
+
+          for f in $(find /tmp/web /tmp/worker -path '*argocd/applications*' -name '*.yaml'); do
+            name=$(basename "$f" .yaml)
+            echo "rendering $f"
+            helm template "$name" /tmp/paved-road/helm-charts/standard-service \
+              --namespace "$name" -f /tmp/platform.yaml -f "$f" > /dev/null
+          done
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest

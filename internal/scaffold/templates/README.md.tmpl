@@ -1,0 +1,62 @@
+# {%.Name%}
+
+Owned by **{%.Team%}**. Runs on the internal developer platform.
+
+## Deploying
+
+Push a semver tag. CI builds the image, pushes it to ECR, and opens a PR
+against [`{%.PlatformRepo%}`](https://github.com/{%.PlatformRepo%}) that bumps
+the image tag. When that PR merges, ArgoCD syncs it.
+
+```bash
+git tag v0.1.1 && git push origin v0.1.1
+```
+
+Untagged pushes to `main` build and scan the image but do not deploy.
+
+## Configuration
+
+Runtime config lives in the platform repo, not here:
+
+{%range .Envs%}- `argocd/applications/{%.%}/values/{%$.Name%}.yaml`
+{%end%}
+Change resource size, replicas, ingress paths, or env vars by opening a PR
+against those files. Everything not set there is inherited from the platform's
+`standard-service` chart.
+
+## What you get by default
+
+| | |
+|---|---|
+| Resource profile | `{%.Profile%}` |
+| Port | `{%.Port%}` |
+| Rollout strategy | `{%.RolloutStrategy%}` |
+| Ingress | {%if .Ingress%}`{%.IngressPath%}`{%else%}none (cluster-internal only){%end%} |
+| Autoscaling | HPA, 2–10 replicas on 80% CPU/memory |
+| Network policy | default-deny, DNS + 443 egress only |
+| Pod security | non-root, read-only rootfs, all caps dropped |
+| TLS in transit | cluster-wide via Cilium WireGuard |
+
+Replica count is managed by the HPA, not by a field in the values file.
+
+## Required endpoints
+
+The chart's probes expect these to exist:
+
+| Path | Purpose |
+|---|---|
+| `/healthz` | liveness — process is alive |
+| `/readyz` | readiness — ready to take traffic |
+| `/metrics` | Prometheus scrape |
+
+## Repo setup
+
+CI needs these set on this repository:
+
+| Kind | Name | Value |
+|---|---|---|
+| Variable | `AWS_ROLE_ARN` | the OIDC role CI assumes to push to ECR |
+| Variable | `PLATFORM_APP_ID` | GitHub App ID for platform-repo access |
+| Secret | `PLATFORM_APP_PRIVATE_KEY` | that App's private key |
+
+The ECR repository `{%.ECRRepository%}` must exist before the first build.

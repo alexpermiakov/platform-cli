@@ -1,0 +1,41 @@
+# Single static binary per platform, plus a Homebrew formula, on every vX.Y.Z
+# tag. No runtime for developers to install or keep in sync.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: platform
+    main: .
+    binary: platform
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/alexpermiakov/platform-cli/internal/cli.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
+
+brews:
+  - name: platform
+    repository:
+      owner: alexpermiakov
+      name: homebrew-tap
+    homepage: https://github.com/alexpermiakov/platform-cli
+    description: Scaffold services onto the internal developer platform
+    license: MIT
+    test: |
+      system "#{bin}/platform", "--version"

@@ -1,0 +1,4 @@
+out/
+dist/
+platform
+.DS_Store
