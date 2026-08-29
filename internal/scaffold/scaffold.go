@@ -64,6 +64,20 @@ func Render(s *Service) ([]File, error) {
 		Content: ci,
 	})
 
+	if !s.NoDockerfile {
+		// Named per language rather than branched inside one template: the
+		// three builds share almost nothing, and a merged file would be more
+		// conditional than content.
+		dockerfile, err := render("dockerfile_"+s.Language+".tmpl", s)
+		if err != nil {
+			return nil, fmt.Errorf("rendering dockerfile: %w", err)
+		}
+		files = append(files, File{
+			Path:    filepath.Join("service-repo", "Dockerfile"),
+			Content: dockerfile,
+		})
+	}
+
 	readme, err := render("README.md.tmpl", s)
 	if err != nil {
 		return nil, fmt.Errorf("rendering readme: %w", err)
@@ -103,19 +117,22 @@ func Write(dir string, files []File, force bool) error {
 	return nil
 }
 
-// render executes one embedded template. Delimiters are {% %} because the
-// output collides with everything else: Helm and GitHub Actions both use
-// {{ }}, and the CI template contains bash [[ ]] conditionals.
+// render executes one embedded template by its base filename. Delimiters are
+// {% %} because the output collides with everything else: Helm and GitHub
+// Actions both use {{ }}, and the CI template contains bash [[ ]] conditionals.
+//
+// The whole directory is parsed on every call, not just the named file, so the
+// CI template can pull in whichever quality_<language> partial applies.
 func render(name string, data any) ([]byte, error) {
-	tmpl, err := template.New(name).
+	tmpl, err := template.New("templates").
 		Delims("{%", "%}").
 		Option("missingkey=error").
-		ParseFS(templatesFS, "templates/"+name)
+		ParseFS(templatesFS, "templates/*.tmpl")
 	if err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
+	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

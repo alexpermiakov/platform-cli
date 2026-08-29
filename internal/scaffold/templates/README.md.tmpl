@@ -1,6 +1,6 @@
 # {%.Name%}
 
-Owned by **{%.Team%}**. Runs on the internal developer platform.
+A {%.LanguageLabel%} service owned by **{%.Team%}**. Runs on the internal developer platform.
 
 ## Deploying
 
@@ -28,6 +28,7 @@ against those files. Everything not set there is inherited from the platform's
 
 | | |
 |---|---|
+| Runtime | {%.LanguageLabel%} |
 | Resource profile | `{%.Profile%}` |
 | Port | `{%.Port%}` |
 | Rollout strategy | `{%.RolloutStrategy%}` |
@@ -48,6 +49,16 @@ The chart's probes expect these to exist:
 | `/healthz` | liveness — process is alive |
 | `/readyz` | readiness — ready to take traffic |
 | `/metrics` | Prometheus scrape |
+
+## Container image
+
+The generated `Dockerfile` is a starting point, not a finished build. Check the
+`CMD` line points at your real entrypoint before the first tag.
+
+The platform runs every pod non-root with a read-only root filesystem and all
+capabilities dropped. Anything your service writes at runtime needs a mounted
+volume; writing to the image filesystem fails in the cluster even though it
+works under `docker run` locally.
 
 ## Repo setup
 

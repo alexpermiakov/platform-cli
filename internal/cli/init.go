@@ -29,8 +29,8 @@ func newInitCommand() *cobra.Command {
 		Short: "Scaffold a new service",
 		Args:  cobra.MaximumNArgs(1),
 		Example: `  platform init
-  platform init payment-processor --team payments --profile medium --ingress
-  platform init worker --team payments --non-interactive`,
+  platform init payment-processor --team payments --language node --ingress
+  platform init worker --team payments --language python --non-interactive`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 {
 				opts.svc.Name = args[0]
@@ -41,6 +41,8 @@ func newInitCommand() *cobra.Command {
 
 	f := cmd.Flags()
 	f.StringVar(&opts.svc.Team, "team", "", "team that owns the service")
+	f.StringVar(&opts.svc.Language, "language", "", "service runtime: "+strings.Join(scaffold.Languages, ", ")+" (default go)")
+	f.BoolVar(&opts.svc.NoDockerfile, "no-dockerfile", false, "skip the Dockerfile, for a repo that already has one")
 	f.IntVar(&opts.svc.Port, "port", 0, "container port (default 8080)")
 	f.StringVar(&opts.svc.Profile, "profile", "", "resource profile: small, medium, or large (default small)")
 	f.StringSliceVar(&opts.svc.Envs, "env", nil, "environments to onboard: dev, staging, prod (default dev)")
@@ -102,6 +104,9 @@ func askAll(s *scaffold.Service) error {
 	if s.Port != 0 {
 		port = strconv.Itoa(s.Port)
 	}
+	if s.Language == "" {
+		s.Language = "go"
+	}
 	if s.Profile == "" {
 		s.Profile = "small"
 	}
@@ -117,7 +122,7 @@ func askAll(s *scaffold.Service) error {
 				Placeholder("payment-processor").
 				Value(&s.Name).
 				Validate(func(v string) error {
-					probe := scaffold.Service{Name: v, Team: "x", Port: 8080, Profile: "small"}
+					probe := scaffold.Service{Name: v, Team: "x", Port: 8080, Profile: "small", Language: "go"}
 					probe.Defaults()
 					return firstNameError(probe.Validate())
 				}),
@@ -133,6 +138,12 @@ func askAll(s *scaffold.Service) error {
 					}
 					return nil
 				}),
+
+			huh.NewSelect[string]().
+				Title("Runtime").
+				Description("Picks the CI quality gate and the Dockerfile. Nothing past the image cares.").
+				Options(huh.NewOptions(scaffold.Languages...)...).
+				Value(&s.Language),
 
 			huh.NewInput().
 				Title("Container port").
@@ -241,5 +252,15 @@ These go to two different repositories.
 
 Before the first deploy, make sure the ECR repository %s exists and your
 service serves /healthz, /readyz, and /metrics on port %d.
-`, s.PlatformRepo, s.ECRRepository(), s.Port)
+%s`, s.PlatformRepo, s.ECRRepository(), s.Port, dockerfileNote(s))
+}
+
+// dockerfileNote calls out the one generated file that is a starting point
+// rather than a finished artifact, so nobody tags a release against a CMD
+// still pointing at the placeholder entrypoint.
+func dockerfileNote(s *scaffold.Service) string {
+	if s.NoDockerfile {
+		return ""
+	}
+	return fmt.Sprintf("\nThe generated Dockerfile is a %s starting point: check its CMD points at your\nreal entrypoint before you tag a release.\n", s.LanguageLabel())
 }

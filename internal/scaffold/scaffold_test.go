@@ -148,6 +148,7 @@ func TestRenderProducesOneValuesFilePerEnv(t *testing.T) {
 		"platform-repo/argocd/applications/dev/values/payment-processor.yaml",
 		"platform-repo/argocd/applications/prod/values/payment-processor.yaml",
 		"service-repo/.github/workflows/ci.yaml",
+		"service-repo/Dockerfile",
 		"service-repo/README.md",
 	}
 	if len(files) != len(want) {
@@ -247,6 +248,10 @@ func TestValidate(t *testing.T) {
 		{"bad env", func(s *Service) { s.Envs = []string{"qa"} }, "environment"},
 		{"port too high", func(s *Service) { s.Port = 70000 }, "out of range"},
 		{"relative ingress path", func(s *Service) { s.Ingress = true; s.IngressPath = "payments" }, "must start with /"},
+		{"unknown language", func(s *Service) { s.Language = "java" }, "language"},
+		{"language typo", func(s *Service) { s.Language = "goo" }, "language"},
+		{"node", func(s *Service) { s.Language = "node" }, ""},
+		{"python", func(s *Service) { s.Language = "python" }, ""},
 	}
 
 	for _, tc := range cases {
@@ -356,6 +361,167 @@ func TestGeneratedValuesNeverEmitReplicaCount(t *testing.T) {
 	for _, f := range files {
 		if strings.Contains(string(f.Content), "replicaCount") {
 			t.Errorf("%s sets replicaCount, which the chart rejects", f.Path)
+		}
+	}
+}
+
+// fileFor returns one rendered file by path suffix.
+func fileFor(t *testing.T, s *Service, suffix string) []byte {
+	t.Helper()
+	files, err := Render(s)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, suffix) {
+			return f.Content
+		}
+	}
+	t.Fatalf("no file rendered ending in %s", suffix)
+	return nil
+}
+
+func TestDefaultLanguageIsGo(t *testing.T) {
+	if got := newService(nil).Language; got != "go" {
+		t.Errorf("Language = %q, want go", got)
+	}
+}
+
+// Spelling should not be a validation error: people type nodejs and py.
+func TestLanguageAliasesNormalize(t *testing.T) {
+	cases := map[string]string{
+		"nodejs": "node", "node.js": "node", "NodeJS": "node",
+		"js": "node", "typescript": "node", "TS": "node",
+		"golang": "go", "Go": "go",
+		"py": "python", "python3": "python", "  Python  ": "python",
+	}
+	for in, want := range cases {
+		s := newService(func(s *Service) { s.Language = in })
+		if s.Language != want {
+			t.Errorf("Language %q normalized to %q, want %q", in, s.Language, want)
+		}
+		if err := s.Validate(); err != nil {
+			t.Errorf("%q should validate after normalizing: %v", in, err)
+		}
+	}
+}
+
+// Every language must produce a CI workflow that is valid YAML with the three
+// jobs wired together -- the quality gate is spliced in from a partial, and an
+// indentation slip there would silently drop the job.
+func TestCIWorkflowIsValidForEveryLanguage(t *testing.T) {
+	for _, lang := range Languages {
+		t.Run(lang, func(t *testing.T) {
+			content := fileFor(t, newService(func(s *Service) { s.Language = lang }), "ci.yaml")
+
+			var wf struct {
+				Jobs map[string]struct {
+					Needs string           `yaml:"needs"`
+					Steps []map[string]any `yaml:"steps"`
+				} `yaml:"jobs"`
+			}
+			if err := yaml.Unmarshal(content, &wf); err != nil {
+				t.Fatalf("ci.yaml is not valid YAML: %v\n---\n%s", err, content)
+			}
+			for _, want := range []string{"quality-gate", "build", "deploy"} {
+				if _, ok := wf.Jobs[want]; !ok {
+					t.Fatalf("missing job %q; jobs present: %v", want, wf.Jobs)
+				}
+			}
+			// checkout plus at least one language step, or the partial did not
+			// actually land inside the job.
+			if n := len(wf.Jobs["quality-gate"].Steps); n < 2 {
+				t.Errorf("quality-gate has %d steps, want the checkout plus %s steps", n, lang)
+			}
+			if wf.Jobs["build"].Needs != "quality-gate" {
+				t.Errorf("build.needs = %q, want quality-gate", wf.Jobs["build"].Needs)
+			}
+		})
+	}
+}
+
+// The whole point of --language: a Node service must not be handed a Go
+// toolchain, and vice versa.
+func TestQualityGateMatchesLanguage(t *testing.T) {
+	cases := map[string]struct{ want, absent []string }{
+		"go":     {want: []string{"actions/setup-go", "go test"}, absent: []string{"setup-node", "setup-python"}},
+		"node":   {want: []string{"actions/setup-node", "npm ci", "npm test"}, absent: []string{"setup-go", "go test", "setup-python"}},
+		"python": {want: []string{"actions/setup-python", "pytest", "ruff"}, absent: []string{"setup-go", "go test", "setup-node"}},
+	}
+	for lang, tc := range cases {
+		t.Run(lang, func(t *testing.T) {
+			ci := string(fileFor(t, newService(func(s *Service) { s.Language = lang }), "ci.yaml"))
+			for _, want := range tc.want {
+				if !strings.Contains(ci, want) {
+					t.Errorf("ci.yaml for %s is missing %q", lang, want)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(ci, absent) {
+					t.Errorf("ci.yaml for %s leaked %q from another language", lang, absent)
+				}
+			}
+		})
+	}
+}
+
+// CI runs `docker build .` unconditionally, so a scaffold without a Dockerfile
+// is a build that fails on its first tag.
+func TestDockerfileIsGeneratedPerLanguage(t *testing.T) {
+	bases := map[string]string{"go": "golang:", "node": "node:", "python": "python:"}
+	for lang, base := range bases {
+		t.Run(lang, func(t *testing.T) {
+			df := string(fileFor(t, newService(func(s *Service) { s.Language = lang }), "Dockerfile"))
+			if !strings.Contains(df, base) {
+				t.Errorf("Dockerfile for %s does not build from %s", lang, base)
+			}
+			// The chart's securityContext sets runAsNonRoot, so an image with
+			// no USER fails admission rather than starting.
+			if !strings.Contains(df, "USER ") {
+				t.Errorf("Dockerfile for %s never drops root; the pod will fail runAsNonRoot", lang)
+			}
+			// CI passes --build-arg VERSION on every build.
+			if !strings.Contains(df, "ARG VERSION") {
+				t.Errorf("Dockerfile for %s ignores the VERSION build arg CI passes", lang)
+			}
+		})
+	}
+}
+
+func TestDockerfileUsesTheConfiguredPort(t *testing.T) {
+	df := string(fileFor(t, newService(func(s *Service) { s.Language = "node"; s.Port = 3000 }), "Dockerfile"))
+	if !strings.Contains(df, "EXPOSE 3000") {
+		t.Errorf("Dockerfile does not EXPOSE the configured port:\n%s", df)
+	}
+	if strings.Contains(df, "8080") {
+		t.Error("Dockerfile hardcodes 8080 instead of the configured port")
+	}
+}
+
+func TestNoDockerfileSkipsIt(t *testing.T) {
+	files, err := Render(newService(func(s *Service) { s.NoDockerfile = true }))
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, "Dockerfile") {
+			t.Error("--no-dockerfile still emitted a Dockerfile")
+		}
+	}
+}
+
+// The values file is the platform's interface and must stay identical across
+// languages: the runtime is an image concern, invisible to the chart.
+func TestLanguageDoesNotLeakIntoValues(t *testing.T) {
+	var first string
+	for _, lang := range Languages {
+		values := fileFor(t, newService(func(s *Service) { s.Language = lang; s.Envs = []string{"dev"} }), "payment-processor.yaml")
+		if first == "" {
+			first = string(values)
+			continue
+		}
+		if string(values) != first {
+			t.Errorf("values for %s differ from the first language; the runtime must not reach the chart", lang)
 		}
 	}
 }

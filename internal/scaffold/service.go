@@ -12,6 +12,27 @@ import (
 // a single service.
 var ResourceProfiles = []string{"small", "medium", "large"}
 
+// Languages are the runtimes the scaffolder knows how to emit a CI quality
+// gate and a Dockerfile for. The platform is language-agnostic past the image
+// boundary, so this list only has to cover what teams actually ship: adding
+// one is a pair of templates plus an entry here.
+var Languages = []string{"go", "node", "python"}
+
+// languageAliases maps what people actually type onto the canonical value, so
+// --language nodejs, node.js, and typescript all land on "node" rather than
+// failing validation over spelling.
+var languageAliases = map[string]string{
+	"golang":     "go",
+	"js":         "node",
+	"javascript": "node",
+	"nodejs":     "node",
+	"node.js":    "node",
+	"ts":         "node",
+	"typescript": "node",
+	"py":         "python",
+	"python3":    "python",
+}
+
 // Environments are the deploy targets, ordered dev -> prod.
 var Environments = []string{"dev", "staging", "prod"}
 
@@ -27,6 +48,7 @@ var semver = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 type Service struct {
 	Name         string
 	Team         string
+	Language     string
 	Port         int
 	Profile      string
 	Envs         []string
@@ -37,13 +59,23 @@ type Service struct {
 	RepoURL      string
 	PlatformRepo string
 	Region       string
+	NoDockerfile bool
 }
 
 // Defaults fills the fields a caller can reasonably not care about. Called
 // before validation so flag-driven (non-interactive) runs need only the
 // genuinely service-specific answers.
 func (s *Service) Defaults() {
+	// Normalize before defaulting so an aliased spelling is not mistaken for
+	// an unset field.
+	s.Language = normalizeLanguage(s.Language)
+	if s.Language == "" {
+		s.Language = "go"
+	}
 	if s.Port == 0 {
+		// One port across the platform regardless of runtime: the chart's
+		// probes, the ALB health check, and the Dockerfile all read this
+		// value, and a per-language default buys nothing but divergence.
 		s.Port = 8080
 	}
 	if s.Profile == "" {
@@ -80,6 +112,9 @@ func (s *Service) Validate() error {
 		return fmt.Errorf("port %d is out of range 1-65535", s.Port)
 	}
 
+	if !contains(Languages, s.Language) {
+		return fmt.Errorf("language %q is not one of %s", s.Language, strings.Join(Languages, ", "))
+	}
 	if !contains(ResourceProfiles, s.Profile) {
 		return fmt.Errorf("resource profile %q is not one of %s", s.Profile, strings.Join(ResourceProfiles, ", "))
 	}
@@ -125,6 +160,29 @@ func (s *Service) PlatformRepoName() string {
 		return name
 	}
 	return s.PlatformRepo
+}
+
+// normalizeLanguage folds case and resolves aliases. It leaves an unknown
+// value untouched so Validate reports what the user actually typed.
+func normalizeLanguage(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if canonical, ok := languageAliases[v]; ok {
+		return canonical
+	}
+	return v
+}
+
+// LanguageLabel is the human-facing name, for generated documentation.
+func (s *Service) LanguageLabel() string {
+	switch s.Language {
+	case "go":
+		return "Go"
+	case "node":
+		return "Node.js"
+	case "python":
+		return "Python"
+	}
+	return s.Language
 }
 
 func contains(haystack []string, needle string) bool {

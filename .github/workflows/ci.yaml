@@ -27,6 +27,15 @@ jobs:
         with:
           version: v4.1.4
 
+      # Scaffold every language into /tmp/scaffolds, so the checks below all
+      # run against the same set of generated repos.
+      - name: Scaffold one service per language
+        run: |
+          set -euo pipefail
+          go run . init web-svc --team platform --language go     --ingress --env dev,prod --non-interactive --out /tmp/scaffolds
+          go run . init api-svc --team platform --language node   --ingress --env dev      --non-interactive --out /tmp/scaffolds
+          go run . init job-svc --team platform --language python           --env dev      --non-interactive --out /tmp/scaffolds
+
       - name: Render generated values against standard-service
         run: |
           set -euo pipefail
@@ -38,14 +47,31 @@ jobs:
             wafAclArn: "arn:aws:wafv2:us-west-2:123456789012:regional/webacl/ci/abc"
           YAML
 
-          go run . init web-svc --team platform --ingress --env dev,prod --non-interactive --out /tmp/web
-          go run . init worker-svc --team platform --env dev --non-interactive --out /tmp/worker
-
-          for f in $(find /tmp/web /tmp/worker -path '*argocd/applications*' -name '*.yaml'); do
+          for f in $(find /tmp/scaffolds -path '*argocd/applications*' -name '*.yaml'); do
             name=$(basename "$f" .yaml)
             echo "rendering $f"
             helm template "$name" /tmp/paved-road/helm-charts/standard-service \
               --namespace "$name" -f /tmp/platform.yaml -f "$f" > /dev/null
+          done
+
+      # A quality gate spliced in from a per-language partial is one bad indent
+      # away from a workflow GitHub silently ignores. actionlint parses it the
+      # way GitHub does. shellcheck is off: it flags the generated run blocks,
+      # which are checked here as a unit rather than line by line.
+      - name: Lint generated workflows
+        run: |
+          set -euo pipefail
+          docker run --rm -v /tmp/scaffolds:/scaffolds -w /scaffolds rhysd/actionlint:latest \
+            -shellcheck= -pyflakes= $(cd /tmp/scaffolds && find . -path '*.github/workflows/*.yaml')
+
+      # The Dockerfiles are templated text until something parses them; hadolint
+      # is what catches a broken continuation or a stage that never drops root.
+      - name: Lint generated Dockerfiles
+        run: |
+          set -euo pipefail
+          for f in $(find /tmp/scaffolds -name Dockerfile); do
+            echo "hadolint $f"
+            docker run --rm -i hadolint/hadolint:latest hadolint - < "$f"
           done
 
   lint:

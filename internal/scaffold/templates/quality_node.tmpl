@@ -1,0 +1,12 @@
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      # --if-present so a service without a lint or build script is not forced
+      # to invent one just to keep CI green.
+      - run: npm run lint --if-present
+      - run: npm run build --if-present
+      - run: npm test
