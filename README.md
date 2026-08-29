@@ -2,10 +2,30 @@
 
 Scaffolds a new service onto the internal developer platform.
 
+## Install
+
+One static binary, no runtime to install or keep in sync. Releases carry
+`darwin` and `linux` builds for `amd64` and `arm64`:
+
 ```bash
-brew install alexpermiakov/tap/platform
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+
+curl -sSL "https://github.com/alexpermiakov/platform-cli/releases/latest/download/platform-cli_${OS}_${ARCH}.tar.gz" \
+  | tar xz platform
+sudo mv platform /usr/local/bin/
+
 platform init
 ```
+
+Or take the tarball straight from the
+[latest release](https://github.com/alexpermiakov/platform-cli/releases/latest);
+each one ships a `checksums.txt` alongside it.
+
+Upgrading is the same command again — nothing tracks the version for you.
+That matters more than it looks: the templates are compiled into the binary,
+so an old copy quietly generates old scaffolds. `platform --version` reports
+the release tag it was cut from, and `dev` when built from source.
 
 ## What it generates
 
