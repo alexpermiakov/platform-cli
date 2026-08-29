@@ -20,27 +20,11 @@ jobs:
           go-version: "1.24"
           cache: true
 
-      # goreleaser commits the formula to homebrew-tap, a different repository,
-      # and GITHUB_TOKEN is scoped to this one. The same App the rest of the
-      # platform authenticates with, rather than a long-lived PAT.
-      #
-      # Deliberately before goreleaser: if the App cannot reach the tap, this
-      # fails while nothing has been published yet. Minting it afterwards would
-      # leave a release created and no formula to match it, which is far more
-      # annoying to unpick than a failed run.
-      - name: Mint tap token
-        id: tap-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ vars.PLATFORM_APP_ID }}
-          private-key: ${{ secrets.PLATFORM_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: homebrew-tap
-
+      # Everything is published to this repository's own releases, so the
+      # automatic GITHUB_TOKEN is the only credential needed.
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
